@@ -26,6 +26,7 @@ public interface Protocol
 {
     void connect() throws Exception;
     void close() throws Exception;
+    void cancel();
 
     CBResultSet query(CBStatement statement, String sql) throws SQLException;
     int executeUpdate(CBStatement statement, String sql) throws SQLException;

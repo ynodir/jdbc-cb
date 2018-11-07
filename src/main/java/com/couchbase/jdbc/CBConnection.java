@@ -336,7 +336,7 @@ public class CBConnection implements java.sql.Connection
             {
                 protocol.close();
                 connected.set(false);
-                CBDriver.registered.cleanup(this);
+                CBDriver.registeredDriver.cleanup(this);
             }
             catch (Exception ex)
             {

@@ -12,10 +12,7 @@
 
 package com.couchbase.jdbc;
 
-import com.couchbase.jdbc.core.CouchError;
-import com.couchbase.jdbc.core.CouchResponse;
-import com.couchbase.jdbc.core.Field;
-import com.couchbase.jdbc.core.SqlJsonImplementation;
+import com.couchbase.jdbc.core.*;
 import com.couchbase.jdbc.util.TimestampUtils;
 import com.couchbase.json.SQLJSON;
 import org.boon.json.JsonFactory;
@@ -1569,16 +1566,13 @@ public class CBResultSet implements java.sql.ResultSet
                 switch (field.getSqlType())
                 {
                     case Types.NUMERIC:
-                        return new Double((String)object);
                     case Types.BOOLEAN:
-                        return Boolean.valueOf((String) object);
+                        return object;
+
                     case Types.VARCHAR:
-                        if (object instanceof java.util.Date)
-                        {
-                            return new java.sql.Date(((java.util.Date)object).getTime());
-                        }
-                        else
-                        {
+                        if (object instanceof java.util.Date) {
+                            return new java.sql.Date(((java.util.Date)object).getTime());   //TODO this might fail also
+                        } else {
                             return object;
                         }
                     case Types.ARRAY:

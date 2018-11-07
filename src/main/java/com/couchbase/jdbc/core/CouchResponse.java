@@ -11,6 +11,9 @@
 
 package com.couchbase.jdbc.core;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,11 +23,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Created by davec on 2015-06-23.
  */
-public class CouchResponse
-{
+public class CouchResponse {
+    private static final Logger logger = LoggerFactory.getLogger(CouchResponse.class);
+
     AtomicBoolean fieldsInitialized = new AtomicBoolean(false);
 
-    Map <String,String>    signature=null;
+    Map<String, String> signature = null;
     ArrayList<Field> fields;
 
     List<CouchError> errors;
@@ -32,7 +36,7 @@ public class CouchResponse
     CouchMetrics metrics;
     String requestId;
     String status;
-    List <Map<String,Object>> results;
+    List<Map<String, Object>> results;
 
 
     public CouchMetrics getMetrics()
@@ -43,38 +47,30 @@ public class CouchResponse
 
     // we don't know which will get called first so set the fields in getFields()
 
-    public void setSignature(Map <String,String> signature)
+    public void setSignature(Map<String, String> signature)
     {
         this.signature = signature;
     }
 
-    public ArrayList<Field>getFields()
-    {
+    public ArrayList<Field> getFields() {
         // check to make sure we haven't set these yet
-        if (!fieldsInitialized.getAndSet(true))
-        {
-            if (signature != null)
-            {
-                fields = new ArrayList<Field>(signature.size());
+        if (! fieldsInitialized.getAndSet(true)) {
+            if (signature != null) {
+                fields = new ArrayList<>(signature.size());
             }
 
-            if (signature.containsKey("*")  )
-            {
+            if (signature.containsKey("*")) {
                 if (metrics.getResultSize() > 0) {
-                    Map<String,Object> firstRow = results.get(0);
-                    Set <String>keySet = firstRow.keySet();
+                    Map<String, Object> firstRow = results.get(0);
+                    Set<String> keySet = firstRow.keySet();
 
-                    for (String key : keySet)
-                    {
-                        Object object =  firstRow.get(key);
-                        if (object == null )
-                        {
-                            fields.add( new Field(key, "null"));
-                        }
-                        else
-                        {
+                    for (String key : keySet) {
+                        Object object = firstRow.get(key);
+                        if (object == null) {
+                            fields.add(new Field(key, "null"));
+                        } else {
                             Object type = firstRow.get(key);
-                            String jsonType="json";
+                            String jsonType = "json";
 
                             if (type instanceof Number)
                                 jsonType = "number";
@@ -82,9 +78,9 @@ public class CouchResponse
                                 jsonType = "boolean";
                             else if ( type instanceof String)
                                 jsonType = "string";
-                            else if (type instanceof Map )
+                            else if (type instanceof Map)
                                 jsonType = "json";
-                            else if ( type instanceof List )
+                            else if ( type instanceof List)
                                 jsonType = "json";
 
                             fields.add(new Field(key, jsonType));

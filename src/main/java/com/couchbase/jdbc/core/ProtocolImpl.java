@@ -18,7 +18,6 @@ import com.couchbase.jdbc.ConnectionParameters;
 import com.couchbase.jdbc.connect.Cluster;
 import com.couchbase.jdbc.connect.Instance;
 import com.couchbase.jdbc.connect.Protocol;
-
 import org.apache.http.HttpEntity;
 import org.apache.http.NameValuePair;
 import org.apache.http.client.ClientProtocolException;
@@ -26,6 +25,7 @@ import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
@@ -42,6 +42,7 @@ import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.message.BasicNameValuePair;
 import org.apache.http.util.EntityUtils;
 import org.boon.core.reflection.MapObjectConversion;
+import org.boon.core.value.LazyValueMap;
 import org.boon.json.JsonFactory;
 import org.boon.json.ObjectMapper;
 import org.slf4j.Logger;
@@ -52,6 +53,8 @@ import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocket;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -66,10 +69,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Created by davec on 2015-02-22.
  */
-public class ProtocolImpl implements Protocol
-{
+public class ProtocolImpl implements Protocol {
+    private static final Logger logger = LoggerFactory.getLogger(ProtocolImpl.class);
 
-    private static final String STATEMENT="statement";
+    private static final String STATEMENT = "statement";
     private static final String ENCODING = "encoding";
     private static final String NAMESPACE = "namespace";
     private static final String READ_ONLY = "readonly";
@@ -86,7 +89,8 @@ public class ProtocolImpl implements Protocol
     private static final int N1QL_FATAL = 5;
 
 
-    static final Map <String,Integer> statusStrings = new HashMap<String,Integer>();
+    static final Map<String, Integer> statusStrings = new HashMap<>();
+
     static {
         statusStrings.put( "errors", N1QL_ERROR );
         statusStrings.put( "success", N1QL_SUCCESS );
@@ -96,7 +100,6 @@ public class ProtocolImpl implements Protocol
         statusStrings.put( "timeout", N1QL_TIMEOUT );
         statusStrings.put( "fatal", N1QL_FATAL );
     }
-
     String schema;
     String url;
     String user;
@@ -107,14 +110,16 @@ public class ProtocolImpl implements Protocol
     SQLWarning sqlWarning;
 
     Cluster cluster;
-    boolean ssl=false;
+    boolean ssl = false;
 
-    int connectTimeout=0;
-    int queryTimeout=75;
+    int connectTimeout = 0;
+    int queryTimeout = 75;
     boolean readOnly = false;
     long updateCount;
     CBResultSet resultSet;
-    List <String> batchStatements = new ArrayList<String>();
+    HttpUriRequest httpRequest;
+    List <String> batchStatements = new ArrayList<>();
+
 
     public String getURL()
     {
@@ -139,8 +144,6 @@ public class ProtocolImpl implements Protocol
     }
 
     public boolean getReadOnly( ) { return this.readOnly; }
-
-    private static final Logger logger = LoggerFactory.getLogger(ProtocolImpl.class);
 
     CloseableHttpClient httpClient;
 
@@ -215,7 +218,11 @@ public class ProtocolImpl implements Protocol
                         .<ConnectionSocketFactory> create().register("https", sslsf)
                         .build();
                 HttpClientConnectionManager cm = new PoolingHttpClientConnectionManager(socketFactoryRegistry);
-                httpClient = HttpClients.custom().setConnectionManager(cm).setDefaultRequestConfig(requestConfig).build();
+                httpClient = HttpClients.custom()
+                        .setConnectionManager(cm)
+                        .setConnectionManagerShared(true)
+                        .setDefaultRequestConfig(requestConfig)
+                        .build();
                 ssl=true;
 
             }catch (Exception ex)
@@ -329,16 +336,15 @@ public class ProtocolImpl implements Protocol
         Instance instance = getNextEndpoint();
 
 
-        @SuppressWarnings("unchecked") Map <String,String>parameters = new HashMap();
+        Map<String, String> parameters = new HashMap<>();
 
         parameters.put(STATEMENT,sql);
         addOptions(parameters);
 
-        List<NameValuePair>parms = new ArrayList<NameValuePair>();
+        List<NameValuePair> parms = new ArrayList<>();
 
-        for(String parameter:parameters.keySet())
-        {
-            parms.add(new BasicNameValuePair(parameter,parameters.get(parameter)));
+        for (String parameter : parameters.keySet()) {
+            parms.add(new BasicNameValuePair(parameter, parameters.get(parameter)));
         }
 
 
@@ -355,18 +361,16 @@ public class ProtocolImpl implements Protocol
                 logger.error("Invalid request {}", url);
             }
 
-            HttpGet httpGet = new HttpGet(uri);
+            httpRequest = new HttpGet(uri);     //might cause memory leaks as might overwrite existing httpRequest
 
-            httpGet.setHeader("Accept", "application/json");
-            logger.trace("Get request {}", httpGet.toString());
+            httpRequest.setHeader("Accept", "application/json");
+            logger.trace("Get request {}", httpRequest.toString());
 
-            try {
+            try (CloseableHttpResponse response = httpClient.execute(httpRequest)) {
 
-                CloseableHttpResponse response = httpClient.execute(httpGet);
                 return new CBResultSet(statement, handleResponse(sql, response));
 
-            } catch (ConnectTimeoutException cte)
-            {
+            } catch (ConnectTimeoutException cte) {
                 logger.trace(cte.getLocalizedMessage());
 
                 // this one failed, lets move on
@@ -400,7 +404,7 @@ public class ProtocolImpl implements Protocol
 
     }
 
-    public CouchResponse handleResponse(String sql, CloseableHttpResponse response) throws SQLException,IOException {
+    public CouchResponse handleResponse(String sql, CloseableHttpResponse response) throws SQLException, IOException {
         int status = response.getStatusLine().getStatusCode();
         HttpEntity entity = response.getEntity();
 
@@ -412,36 +416,49 @@ public class ProtocolImpl implements Protocol
         String strResponse = EntityUtils.toString(entity);
 //        logger.trace( "Response to query {} {}", sql, strResponse );
 
-        Object foo = mapper.readValue(strResponse, Map.class);
+        Map<String, Object> foo = mapper.readValue(strResponse, Map.class);
         Map<String, Object> rootAsMap = null;
-        if (foo instanceof Map)
+        if (foo != null)
         {
             //noinspection unchecked
-            rootAsMap = (Map <String,Object>) foo;
+            rootAsMap = foo;
         }
         else
         {
             logger.debug("error");
         }
-        couchResponse.status    = (String)rootAsMap.get("status");
-        couchResponse.requestId = (String)rootAsMap.get("requestID");
+        couchResponse.status = (String) rootAsMap.get("status");
+        couchResponse.requestId = (String) rootAsMap.get("requestID");
         Object signature = rootAsMap.get("signature");
 
         if ( signature instanceof Map )
         {
             //noinspection unchecked
-            couchResponse.signature = (Map)signature;
+            couchResponse.signature = (Map) signature;
             //noinspection unchecked
-            couchResponse.results   = (List)rootAsMap.get("results");
+            Iterator iterator = ((List) rootAsMap.get("results")).iterator();
+
+            couchResponse.results = new ArrayList<>();
+            while ( iterator.hasNext() )
+            {
+                LazyValueMap object = (LazyValueMap) iterator.next();
+
+                //noinspection unchecked
+                if (object.values().iterator().next() instanceof Map) {
+                    couchResponse.results.add((LazyValueMap) object.entrySet().iterator().next().getValue());
+                } else {
+                    couchResponse.results.add(object);
+                }
+            }
         }
         else if ( signature instanceof String )
         {
-            couchResponse.signature =  new HashMap<String, String>();
-            couchResponse.signature.put("$1",(String)signature);
+            couchResponse.signature = new HashMap<>();
+            couchResponse.signature.put("$1", (String) signature);
 
-            Iterator iterator = ((List)rootAsMap.get("results")).iterator();
+            Iterator iterator = ((List) rootAsMap.get("results")).iterator();
 
-            couchResponse.results=new ArrayList<>();
+            couchResponse.results = new ArrayList<>();
             while ( iterator.hasNext() )
             {
                 Object object = iterator.next();
@@ -450,9 +467,8 @@ public class ProtocolImpl implements Protocol
                 //noinspection unchecked
                 entry.put("$1", object );
                 //noinspection unchecked
-                couchResponse.results.add(entry) ;
+                couchResponse.results.add(entry);
             }
-
         }
         else if (signature != null)
         {
@@ -498,7 +514,7 @@ public class ProtocolImpl implements Protocol
         switch (status)
         {
             case 200:
-                switch (iStatus.intValue())
+                switch (iStatus)
                 {
                     case N1QL_ERROR:
                         List <CouchError> errors = couchResponse.errors;
@@ -602,20 +618,23 @@ public class ProtocolImpl implements Protocol
                 String url = endPoint.getEndpointURL(ssl);
 
                 logger.trace("Using endpoint {}", url);
-                HttpPost httpPost = new HttpPost(url);
-                httpPost.setHeader("Accept", "application/json");
+                httpRequest = new HttpPost(url);    //might cause memory leaks as might overwrite existing httpRequest
+                httpRequest.setHeader("Accept", "application/json");
 
-                logger.trace("do query {}", httpPost.toString());
+                logger.trace("do query {}", httpRequest.toString());
                 addOptions(queryParameters);
 
-
+                if (queryParameters.containsKey(CREDENTIALS)) {
+                    queryParameters.put(CREDENTIALS, JsonFactory.fromJson((String) queryParameters.get(CREDENTIALS)));
+                }
                 String jsonParameters = JsonFactory.toJson(queryParameters);
+                logger.error("jsonParameters: {}", jsonParameters);
                 StringEntity entity = new StringEntity(jsonParameters, ContentType.APPLICATION_JSON);
+                logger.error("entity: {}", entity);
 
+                ((HttpPost) httpRequest).setEntity(entity);
 
-                httpPost.setEntity(entity);
-
-                CloseableHttpResponse response = httpClient.execute(httpPost);
+                CloseableHttpResponse response = httpClient.execute(httpRequest);
 
                 return handleResponse(query, response);
 
@@ -634,7 +653,12 @@ public class ProtocolImpl implements Protocol
 
 
             } catch (Exception ex) {
-                logger.error("Error executing query [{}] {}", query, ex.getMessage());
+                logger.error("Error executing doQuery [{}] {}", query, ex.getMessage());
+                StringWriter sw = new StringWriter();
+                PrintWriter pw = new PrintWriter(sw);
+                ex.printStackTrace(pw);
+                pw.flush();
+                logger.error("stackTrace: {}", sw.getBuffer().toString());
                 throw new SQLException("Error executing update", ex);
             }
         }
@@ -702,24 +726,21 @@ public class ProtocolImpl implements Protocol
     }
 
 // batch statements do not work
-    public int [] executeBatch() throws SQLException
-    {
-        try
-        {
+    public int [] executeBatch() throws SQLException {
+        try {
             Instance instance = getNextEndpoint();
             String url = instance.getEndpointURL(ssl);
 
-            HttpPost httpPost = new HttpPost( url );
-            httpPost.setHeader("Accept", "application/json");
+            httpRequest = new HttpPost(url);  // might cause memory leaks as overwrites httpRequest
+            httpRequest.setHeader("Accept", "application/json");
 
-            Map <String,Object> parameters = new HashMap<String,Object>();
+            Map<String, Object> parameters = new HashMap<>();
             addOptions(parameters);
-            for (String query:batchStatements)
-            {
+            for (String query : batchStatements) {
                 parameters.put(STATEMENT, query);
             }
 
-            CloseableHttpResponse response = httpClient.execute(httpPost);
+            CloseableHttpResponse response = httpClient.execute(httpRequest);
             int status = response.getStatusLine().getStatusCode();
 
             if ( status >= 200 && status < 300 )
@@ -831,6 +852,11 @@ public class ProtocolImpl implements Protocol
     public void close() throws Exception
     {
         httpClient.close();
+    }
+
+    @Override
+    public void cancel() {
+        httpRequest.abort();
     }
 
     @Override
@@ -986,5 +1012,3 @@ public class ProtocolImpl implements Protocol
 
     }
 }
-
-

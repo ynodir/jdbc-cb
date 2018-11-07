@@ -15,7 +15,6 @@ package com.couchbase.jdbc;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
-
 import org.slf4j.LoggerFactory;
 
 import java.sql.*;
@@ -34,33 +33,36 @@ public class CBDriver implements java.sql.Driver
 
     public static final String DRIVER_NAME = "n1ql_jdbc";
 
-    static CBDriver registered;
+    static CBDriver registeredDriver;
 
     final Thread houseKeepingThread;
     final ClusterThread ct;
-    static
-    {
-        try
-        {
-            registered = new CBDriver();
-            java.sql.DriverManager.registerDriver(registered);
 
-        }
-        catch (SQLException e)
-        {
+    static {
+        try {
+            registeredDriver = new CBDriver();
+            DriverManager.registerDriver(registeredDriver);
+//            System.setSecurityManager(new SecurityManager()); //TODO check why is this needed
+        } catch (SQLException e) {
             logger.error("Error registering driver", e);
         }
 
-
+        //TODO remove this
+        synchronized (CBDriver.class)
+        {
+            Logger logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.couchbase");
+            logger.setLevel(Level.ALL);
+            //logLevelSet = true;
+        }
     }
 
-    public CBDriver() throws SQLException
-    {
+    public CBDriver() throws SQLException {
         ct = new ClusterThread();
         houseKeepingThread = new Thread(ct, "Couchbase housekeeping thread");
         houseKeepingThread.setDaemon(true);
         houseKeepingThread.start();
     }
+
     /**
      * Attempts to make a database connection to the given URL.
      * The driver should return "null" if it realizes it is the wrong kind
@@ -86,17 +88,13 @@ public class CBDriver implements java.sql.Driver
      * @throws java.sql.SQLException if a database access error occurs
      */
     @Override
-    public Connection connect(String url, Properties info) throws SQLException
-    {
+    public Connection connect(String url, Properties info) throws SQLException {
 
-        if (acceptsURL(url))
-        {
+        if (acceptsURL(url)) {
             CBConnection con = new CBConnection(url, info);
             ct.addConnection(con);
             return con;
-        }
-        else
-        {
+        } else {
             return null;
         }
     }
@@ -237,11 +235,11 @@ public class CBDriver implements java.sql.Driver
 
     public static void cleanup()
     {
-        if (registered != null)
+        if (registeredDriver != null)
         {
             try
             {
-                DriverManager.deregisterDriver(registered);
+                DriverManager.deregisterDriver(registeredDriver);
 
                 //stop the thread below
                 runCluster=false;
@@ -262,14 +260,13 @@ public class CBDriver implements java.sql.Driver
 
     static boolean runCluster=true;
 
-    private static class ClusterThread implements Runnable
-    {
-
+    private static class ClusterThread implements Runnable {
         ConcurrentLinkedQueue <CBConnection> connections;
-        ClusterThread()
-        {
-            connections = new ConcurrentLinkedQueue<CBConnection>();
+
+        ClusterThread() {
+            connections = new ConcurrentLinkedQueue<>();
         }
+
         @Override
         public void run()
         {

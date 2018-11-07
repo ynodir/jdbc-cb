@@ -29,7 +29,7 @@ public class Cluster
 
     Integer instanceIndex = new Integer(0);
     AtomicInteger numInstances = new AtomicInteger(0);
-    List<Instance> endpoints = new ArrayList<Instance>();
+    List<Instance> endpoints = new ArrayList<>();
 
     /*
     [{"cluster":"default","name":"10.168.209.119","queryEndpoint":"http://10.168.209.119:8093/query/service","adminEndpoint":"http://10.168.209.119:8093/admin","options":null},

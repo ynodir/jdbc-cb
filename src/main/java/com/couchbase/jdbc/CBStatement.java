@@ -15,13 +15,7 @@ package com.couchbase.jdbc;
 import com.couchbase.jdbc.connect.Protocol;
 import com.couchbase.jdbc.util.SqlParser;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.SQLWarning;
-import java.sql.SQLTimeoutException;
-import java.sql.SQLFeatureNotSupportedException;
-
+import java.sql.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -69,10 +63,14 @@ public class CBStatement implements java.sql.Statement
     @Override
     public ResultSet executeQuery(String sql) throws SQLException
     {
-        checkClosed();
-        SqlParser sqlParser = new SqlParser("");
-        sql = sqlParser.replaceProcessing(sql, escapeProcessing);
-        return protocol.query(this, sql);
+        try {
+            checkClosed();
+            SqlParser sqlParser = new SqlParser("");
+            sql = sqlParser.replaceProcessing(sql, escapeProcessing);
+            return protocol.query(this, sql);
+        } finally {
+            close();
+        }
     }
 
     /**
@@ -307,7 +305,9 @@ public class CBStatement implements java.sql.Statement
     @Override
     public void cancel() throws SQLException
     {
-        throw CBDriver.notImplemented(CBStatement.class, "cancel");
+        protocol.cancel();
+
+//        throw CBDriver.notImplemented(CBStatement.class, "cancel");
         //todo test
     }
 
@@ -423,13 +423,17 @@ public class CBStatement implements java.sql.Statement
     @Override
     public boolean execute(String sql) throws SQLException
     {
-        checkClosed();
+        try {
+            checkClosed();
 
-        // todo this needs to be refactored, no reason to store the result in the protocol layer
-        boolean hasResult = protocol.execute(this,sql);
-        resultSet =  protocol.getResultSet();
-        updateCount = (int)protocol.getUpdateCount();
-        return hasResult;
+            // todo this needs to be refactored, no reason to store the result in the protocol layer
+            boolean hasResult = protocol.execute(this, sql);
+            resultSet = protocol.getResultSet();
+            updateCount = (int) protocol.getUpdateCount();
+            return hasResult;
+        } finally {
+            connection.commit();
+        }
     }
 
     /**
@@ -620,7 +624,7 @@ public class CBStatement implements java.sql.Statement
     }
 
     /**
-     * Adds the given SQL command to the current list of commmands for this
+     * Adds the given SQL command to the current list of commands for this
      * <code>Statement</code> object. The commands in this list can be
      * executed as a batch by calling the method <code>executeBatch</code>.
      * 
